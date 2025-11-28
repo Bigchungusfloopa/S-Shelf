@@ -1,136 +1,86 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Header
 import spotipy
-from spotipy.oauth2 import SpotifyOAuth
-import os
-import json
-from dotenv import load_dotenv
-
-load_dotenv()
+from typing import Optional
 
 router = APIRouter(prefix="/spotify", tags=["spotify"])
 
-SPOTIPY_CLIENT_ID = os.getenv("SPOTIPY_CLIENT_ID")
-SPOTIPY_CLIENT_SECRET = os.getenv("SPOTIPY_CLIENT_SECRET")
-SPOTIPY_REDIRECT_URI = "http://127.0.0.1:8080/callback"
-SCOPE = "user-library-read user-follow-read playlist-read-private user-top-read user-read-recently-played"
-
-print(f"[SPOTIFY] Client ID loaded: {SPOTIPY_CLIENT_ID[:10] if SPOTIPY_CLIENT_ID else 'NOT SET'}...")
-print(f"[SPOTIFY] Client Secret loaded: {'SET' if SPOTIPY_CLIENT_SECRET else 'NOT SET'}")
-
-def get_spotify_oauth():
-    if not SPOTIPY_CLIENT_ID or not SPOTIPY_CLIENT_SECRET:
+def get_spotify_client(authorization: str = None):
+    """Get Spotify client using provided Bearer token"""
+    if not authorization or not authorization.startswith('Bearer '):
         raise HTTPException(
-            status_code=500,
-            detail="Spotify credentials not configured. Check .env file."
+            status_code=401,
+            detail="Missing or invalid Authorization header. Expected format: 'Bearer <token>'"
         )
     
-    return SpotifyOAuth(
-        client_id=SPOTIPY_CLIENT_ID,
-        client_secret=SPOTIPY_CLIENT_SECRET,
-        redirect_uri=SPOTIPY_REDIRECT_URI,
-        scope=SCOPE,
-        cache_path=".spotify_cache",
-        open_browser=False
-    )
-
-def get_spotify_client():
-    """Get Spotify client using cached token"""
-    sp_oauth = get_spotify_oauth()
-    
-    token_info = sp_oauth.get_cached_token()
-    
-    if not token_info:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    
-    if sp_oauth.is_token_expired(token_info):
-        try:
-            token_info = sp_oauth.refresh_access_token(token_info['refresh_token'])
-        except:
-            raise HTTPException(status_code=401, detail="Token refresh failed")
-    
-    return spotipy.Spotify(auth=token_info['access_token'])
+    token = authorization.replace('Bearer ', '')
+    return spotipy.Spotify(auth=token)
 
 def calculate_artist_rank(followers):
     """Calculate approximate global rank based on followers"""
-    # Rough estimates based on Spotify data
-    if followers >= 80000000:  # 80M+
+    if followers >= 80000000:
         return 1
-    elif followers >= 50000000:  # 50-80M
+    elif followers >= 50000000:
         return 5
-    elif followers >= 30000000:  # 30-50M
+    elif followers >= 30000000:
         return 10
-    elif followers >= 20000000:  # 20-30M
+    elif followers >= 20000000:
         return 20
-    elif followers >= 10000000:  # 10-20M
+    elif followers >= 10000000:
         return 50
-    elif followers >= 5000000:   # 5-10M
+    elif followers >= 5000000:
         return 100
-    elif followers >= 2000000:   # 2-5M
+    elif followers >= 2000000:
         return 500
-    elif followers >= 1000000:   # 1-2M
+    elif followers >= 1000000:
         return 1000
-    elif followers >= 500000:    # 500K-1M
+    elif followers >= 500000:
         return 5000
-    elif followers >= 100000:    # 100K-500K
+    elif followers >= 100000:
         return 10000
     else:
         return 50000
 
 @router.get("/check-auth")
-def check_auth():
-    """Check if authenticated"""
+def check_auth(authorization: str = Header(None)):
+    """Check if user has valid Spotify token"""
     try:
-        if not SPOTIPY_CLIENT_ID or not SPOTIPY_CLIENT_SECRET:
+        if not authorization:
             return {
-                "authenticated": False, 
-                "needs_reauth": False, 
-                "debug": "credentials_not_configured"
+                "authenticated": False,
+                "needs_reauth": True,
+                "message": "No authorization header provided"
             }
         
-        if not os.path.exists(".spotify_cache"):
-            return {
-                "authenticated": False, 
-                "needs_reauth": False, 
-                "debug": "cache_file_missing"
-            }
-        
-        with open(".spotify_cache", "r") as f:
-            cache_data = json.load(f)
-            if not cache_data.get("access_token"):
-                return {
-                    "authenticated": False, 
-                    "needs_reauth": False, 
-                    "debug": "no_access_token"
-                }
-        
-        sp_oauth = get_spotify_oauth()
-        token_info = sp_oauth.get_cached_token()
-        
-        if not token_info:
-            return {
-                "authenticated": False, 
-                "needs_reauth": False, 
-                "debug": "token_info_none"
-            }
+        # Try to use the token
+        sp = get_spotify_client(authorization)
+        user = sp.current_user()
         
         return {
-            "authenticated": True, 
+            "authenticated": True,
             "needs_reauth": False,
-            "debug": "token_exists"
+            "user": {
+                "id": user.get("id"),
+                "display_name": user.get("display_name"),
+            }
         }
-        
+    except HTTPException:
+        return {
+            "authenticated": False,
+            "needs_reauth": True,
+            "message": "Invalid or expired token"
+        }
     except Exception as e:
         return {
-            "authenticated": False, 
-            "needs_reauth": False,
-            "debug": f"error: {str(e)}"
+            "authenticated": False,
+            "needs_reauth": True,
+            "message": str(e)
         }
 
 @router.get("/artist/{artist_id}")
-def get_artist_details(artist_id: str):
+def get_artist_details(artist_id: str, authorization: str = Header(None)):
     """Get detailed artist information"""
     try:
-        sp = get_spotify_client()
+        sp = get_spotify_client(authorization)
         artist = sp.artist(artist_id)
         
         rank = calculate_artist_rank(artist["followers"]["total"])
@@ -150,10 +100,14 @@ def get_artist_details(artist_id: str):
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/playlists")
-def get_playlists(limit: int = 50, offset: int = 0):
+def get_playlists(
+    authorization: str = Header(None),
+    limit: int = 50,
+    offset: int = 0
+):
     """Get user's Spotify playlists"""
     try:
-        sp = get_spotify_client()
+        sp = get_spotify_client(authorization)
         playlists = sp.current_user_playlists(limit=limit, offset=offset)
         
         return {
@@ -178,10 +132,15 @@ def get_playlists(limit: int = 50, offset: int = 0):
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/playlists/{playlist_id}/tracks")
-def get_playlist_tracks(playlist_id: str, limit: int = 50, offset: int = 0):
+def get_playlist_tracks(
+    playlist_id: str,
+    authorization: str = Header(None),
+    limit: int = 50,
+    offset: int = 0
+):
     """Get tracks from a specific playlist"""
     try:
-        sp = get_spotify_client()
+        sp = get_spotify_client(authorization)
         results = sp.playlist_tracks(playlist_id, limit=limit, offset=offset)
         
         return {
@@ -200,7 +159,7 @@ def get_playlist_tracks(playlist_id: str, limit: int = 50, offset: int = 0):
                     "added_at": item["added_at"],
                 }
                 for item in results["items"]
-                if item["track"] is not None  # Filter out null tracks
+                if item["track"] is not None
             ],
             "total": results["total"]
         }
@@ -210,12 +169,17 @@ def get_playlist_tracks(playlist_id: str, limit: int = 50, offset: int = 0):
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/albums/{album_id}/tracks")
-def get_album_tracks(album_id: str, limit: int = 50, offset: int = 0):
+def get_album_tracks(
+    album_id: str,
+    authorization: str = Header(None),
+    limit: int = 50,
+    offset: int = 0
+):
     """Get tracks from a specific album"""
     try:
-        sp = get_spotify_client()
+        sp = get_spotify_client(authorization)
         results = sp.album_tracks(album_id, limit=limit, offset=offset)
-        album_info = sp.album(album_id)  # Get album info for additional details
+        album_info = sp.album(album_id)
         
         return {
             "tracks": [
@@ -227,7 +191,7 @@ def get_album_tracks(album_id: str, limit: int = 50, offset: int = 0):
                     "track_number": track["track_number"],
                     "disc_number": track["disc_number"],
                     "explicit": track["explicit"],
-                    "popularity": album_info.get("popularity", 0),  # Use album popularity
+                    "popularity": album_info.get("popularity", 0),
                     "album": {
                         "name": album_info["name"],
                         "id": album_info["id"],
@@ -252,10 +216,13 @@ def get_album_tracks(album_id: str, limit: int = 50, offset: int = 0):
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/liked-albums")
-def get_liked_albums(limit: int = 50):
+def get_liked_albums(
+    authorization: str = Header(None),
+    limit: int = 50
+):
     """Get user's liked albums"""
     try:
-        sp = get_spotify_client()
+        sp = get_spotify_client(authorization)
         results = sp.current_user_saved_albums(limit=limit)
         
         return {
@@ -278,10 +245,10 @@ def get_liked_albums(limit: int = 50):
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/followed-artists")
-def get_followed_artists():
+def get_followed_artists(authorization: str = Header(None)):
     """Get user's followed artists"""
     try:
-        sp = get_spotify_client()
+        sp = get_spotify_client(authorization)
         results = sp.current_user_followed_artists(limit=50)
         
         return {
@@ -304,13 +271,17 @@ def get_followed_artists():
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/top-tracks")
-def get_top_tracks(time_range: str = "medium_term", limit: int = 20):
+def get_top_tracks(
+    authorization: str = Header(None),
+    time_range: str = "medium_term",
+    limit: int = 20
+):
     """
     Get user's top tracks for a specific time range
     time_range: short_term (4 weeks), medium_term (6 months), long_term (all time)
     """
     try:
-        sp = get_spotify_client()
+        sp = get_spotify_client(authorization)
         results = sp.current_user_top_tracks(limit=limit, time_range=time_range)
         
         return {
@@ -332,13 +303,17 @@ def get_top_tracks(time_range: str = "medium_term", limit: int = 20):
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/top-artists")
-def get_top_artists(time_range: str = "medium_term", limit: int = 20):
+def get_top_artists(
+    authorization: str = Header(None),
+    time_range: str = "medium_term",
+    limit: int = 20
+):
     """
     Get user's top artists for a specific time range
     time_range: short_term (4 weeks), medium_term (6 months), long_term (all time)
     """
     try:
-        sp = get_spotify_client()
+        sp = get_spotify_client(authorization)
         results = sp.current_user_top_artists(limit=limit, time_range=time_range)
         
         return {
@@ -361,10 +336,10 @@ def get_top_artists(time_range: str = "medium_term", limit: int = 20):
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/user-stats")
-def get_user_stats():
+def get_user_stats(authorization: str = Header(None)):
     """Get Wrapped-like stats"""
     try:
-        sp = get_spotify_client()
+        sp = get_spotify_client(authorization)
         
         top_tracks_short = sp.current_user_top_tracks(limit=10, time_range="short_term")
         top_tracks_long = sp.current_user_top_tracks(limit=10, time_range="long_term")
@@ -426,10 +401,10 @@ def get_user_stats():
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/new-releases")
-def get_new_releases():
+def get_new_releases(authorization: str = Header(None)):
     """Get new releases from followed artists"""
     try:
-        sp = get_spotify_client()
+        sp = get_spotify_client(authorization)
         
         followed = sp.current_user_followed_artists(limit=50)
         artist_ids = [artist["id"] for artist in followed["artists"]["items"]]
@@ -442,8 +417,8 @@ def get_new_releases():
         for artist_id in artist_ids[:20]:
             try:
                 albums = sp.artist_albums(
-                    artist_id, 
-                    album_type='album,single', 
+                    artist_id,
+                    album_type='album,single',
                     limit=3
                 )
                 

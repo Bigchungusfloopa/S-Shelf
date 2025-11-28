@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
 import '../services/theme_provider.dart';
 import '../services/api_service.dart';
+import '../services/spotify_auth_service.dart';
 import '../widgets/themed_screen.dart';
 import '../widgets/playlist_modal.dart';
 import '../widgets/album_modal.dart';
@@ -32,8 +31,9 @@ class _MusicScreenState extends State<MusicScreen> with SingleTickerProviderStat
   List<Map<String, dynamic>> _currentArtists = [];
   bool _isLoadingMonth = false;
 
-  // Add ApiService instance
+  // Add ApiService and SpotifyAuthService
   final ApiService _apiService = ApiService();
+  final SpotifyAuthService _spotifyAuth = SpotifyAuthService();
 
   final List<String> _months = [
     'January', 'February', 'March', 'April', 'May', 'June',
@@ -59,16 +59,13 @@ class _MusicScreenState extends State<MusicScreen> with SingleTickerProviderStat
     setState(() => _isLoading = true);
     
     try {
-      final response = await http.get(Uri.parse('http://localhost:8000/spotify/check-auth'));
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        setState(() {
-          _isSpotifyConnected = data['authenticated'] == true;
-        });
-        
-        if (_isSpotifyConnected) {
-          await _loadSpotifyData();
-        }
+      final isAuth = await _spotifyAuth.isAuthenticated();
+      setState(() {
+        _isSpotifyConnected = isAuth;
+      });
+      
+      if (_isSpotifyConnected) {
+        await _loadSpotifyData();
       }
     } catch (e) {
       print('Error checking Spotify auth: $e');
@@ -79,29 +76,15 @@ class _MusicScreenState extends State<MusicScreen> with SingleTickerProviderStat
 
   Future<void> _loadSpotifyData() async {
     try {
-      final playlistsResponse = await http.get(Uri.parse('http://localhost:8000/spotify/playlists'));
-      if (playlistsResponse.statusCode == 200) {
-        final data = json.decode(playlistsResponse.body);
-        setState(() {
-          _playlists = List<Map<String, dynamic>>.from(data['playlists']);
-        });
-      }
-
-      final albumsResponse = await http.get(Uri.parse('http://localhost:8000/spotify/liked-albums?limit=50'));
-      if (albumsResponse.statusCode == 200) {
-        final data = json.decode(albumsResponse.body);
-        setState(() {
-          _likedAlbums = List<Map<String, dynamic>>.from(data['albums']);
-        });
-      }
-
-      final artistsResponse = await http.get(Uri.parse('http://localhost:8000/spotify/followed-artists'));
-      if (artistsResponse.statusCode == 200) {
-        final data = json.decode(artistsResponse.body);
-        setState(() {
-          _followedArtists = List<Map<String, dynamic>>.from(data['artists']);
-        });
-      }
+      final playlists = await _apiService.getSpotifyPlaylists();
+      final albums = await _apiService.getSpotifyAlbums();
+      final artists = await _apiService.getSpotifyFollowedArtists();
+      
+      setState(() {
+        _playlists = playlists;
+        _likedAlbums = albums;
+        _followedArtists = artists;
+      });
 
       await _loadWrappedStats();
     } catch (e) {
@@ -111,12 +94,10 @@ class _MusicScreenState extends State<MusicScreen> with SingleTickerProviderStat
 
   Future<void> _loadWrappedStats() async {
     try {
-      final statsResponse = await http.get(Uri.parse('http://localhost:8000/spotify/user-stats'));
-      if (statsResponse.statusCode == 200) {
-        setState(() {
-          _wrappedStats = json.decode(statsResponse.body);
-        });
-      }
+      final stats = await _apiService.getSpotifyUserStats();
+      setState(() {
+        _wrappedStats = stats;
+      });
     } catch (e) {
       print('Error loading Spotify stats: $e');
     }
@@ -144,26 +125,14 @@ class _MusicScreenState extends State<MusicScreen> with SingleTickerProviderStat
         }
       }
       
-      final tracksResponse = await http.get(
-        Uri.parse('http://localhost:8000/spotify/top-tracks?time_range=$timeRange&limit=20')
-      );
+      final tracks = await _apiService.getSpotifyTopTracks(timeRange: timeRange);
+      final artists = await _apiService.getSpotifyTopArtists(timeRange: timeRange);
       
-      final artistsResponse = await http.get(
-        Uri.parse('http://localhost:8000/spotify/top-artists?time_range=$timeRange&limit=20')
-      );
-      
-      if (tracksResponse.statusCode == 200 && artistsResponse.statusCode == 200) {
-        final tracksData = json.decode(tracksResponse.body);
-        final artistsData = json.decode(artistsResponse.body);
-        
-        setState(() {
-          _currentTracks = List<Map<String, dynamic>>.from(tracksData['tracks']);
-          _currentArtists = List<Map<String, dynamic>>.from(artistsData['artists']);
-          _isLoadingMonth = false;
-        });
-      } else {
-        setState(() => _isLoadingMonth = false);
-      }
+      setState(() {
+        _currentTracks = tracks;
+        _currentArtists = artists;
+        _isLoadingMonth = false;
+      });
     } catch (e) {
       print('Error loading data for time range: $e');
       setState(() => _isLoadingMonth = false);
@@ -177,7 +146,6 @@ class _MusicScreenState extends State<MusicScreen> with SingleTickerProviderStat
     );
   }
 
-  // Updated modal methods
   void _showPlaylistModal(Map<String, dynamic> playlist) async {
     try {
       final tracks = await _apiService.getPlaylistTracks(playlist['id']);
@@ -191,7 +159,6 @@ class _MusicScreenState extends State<MusicScreen> with SingleTickerProviderStat
       );
     } catch (e) {
       print('Error loading playlist tracks: $e');
-      // Fallback: Show basic playlist info without tracks
       showDialog(
         context: context,
         builder: (context) => PlaylistModal(
@@ -215,7 +182,6 @@ class _MusicScreenState extends State<MusicScreen> with SingleTickerProviderStat
       );
     } catch (e) {
       print('Error loading album tracks: $e');
-      // Fallback: Show basic album info without tracks
       showDialog(
         context: context,
         builder: (context) => AlbumModal(
@@ -225,7 +191,6 @@ class _MusicScreenState extends State<MusicScreen> with SingleTickerProviderStat
       );
     }
   }
-
   @override
   Widget build(BuildContext context) {
     final themeProvider = Provider.of<ThemeProvider>(context);
@@ -249,28 +214,29 @@ class _MusicScreenState extends State<MusicScreen> with SingleTickerProviderStat
                       style: Theme.of(context).textTheme.displayMedium,
                     ),
                     Spacer(),
-                    Container(
-                      padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: Color(0xFF1DB954).withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: Color(0xFF1DB954), width: 2),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(Icons.music_note, color: Color(0xFF1DB954), size: 18),
-                          SizedBox(width: 8),
-                          Text(
-                            'Spotify',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 14,
-                              fontWeight: FontWeight.bold,
+                    if (_isSpotifyConnected)
+                      Container(
+                        padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: Color(0xFF1DB954).withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: Color(0xFF1DB954), width: 2),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.check_circle, color: Color(0xFF1DB954), size: 18),
+                            SizedBox(width: 8),
+                            Text(
+                              'Connected',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
-                    ),
                   ],
                 ),
               ),
@@ -362,13 +328,58 @@ class _MusicScreenState extends State<MusicScreen> with SingleTickerProviderStat
           ),
           SizedBox(height: 30),
           ElevatedButton.icon(
-            onPressed: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('Run: python spotify_oauth_server.py'),
-                  backgroundColor: Color(0xFF1DB954),
+            onPressed: () async {
+              // Show loading
+              showDialog(
+                context: context,
+                barrierDismissible: false,
+                builder: (context) => Center(
+                  child: Container(
+                    padding: EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: Colors.black87,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        CircularProgressIndicator(color: Color(0xFF1DB954)),
+                        SizedBox(height: 16),
+                        Text(
+                          'Connecting to Spotify...',
+                          style: TextStyle(color: Colors.white),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
               );
+
+              final success = await _spotifyAuth.authenticate();
+              
+              // Close loading dialog
+              if (mounted) Navigator.pop(context);
+              
+              if (success) {
+                await _checkAuthentication();
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Successfully connected to Spotify!'),
+                      backgroundColor: Color(0xFF1DB954),
+                    ),
+                  );
+                }
+              } else {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Failed to connect to Spotify. Please try again.'),
+                      backgroundColor: Colors.red,
+                    ),
+                  );
+                }
+              }
             },
             icon: Icon(Icons.music_note, size: 18),
             label: Text('Connect'),
@@ -807,7 +818,7 @@ class _MusicScreenState extends State<MusicScreen> with SingleTickerProviderStat
   }
 }
 
-// Artist Details Modal - Moved outside the state class
+// Artist Details Modal
 class ArtistDetailsModal extends StatelessWidget {
   final Map<String, dynamic> artist;
 
@@ -882,7 +893,6 @@ class ArtistDetailsModal extends StatelessWidget {
               padding: EdgeInsets.all(24),
               child: Column(
                 children: [
-                  // Only show rank if it exists and is <= 999
                   if (artist['rank'] != null && artist['rank'] <= 999) ...[
                     Container(
                       width: 80,

@@ -1,9 +1,11 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../models/models.dart';
+import 'spotify_auth_service.dart';
 
 class ApiService {
   static const String baseUrl = 'http://localhost:8000';
+  final SpotifyAuthService _spotifyAuth = SpotifyAuthService();
 
   // MAL Search - Anime
   Future<List<Map<String, dynamic>>> searchAnimeMAL(String query) async {
@@ -299,7 +301,7 @@ class ApiService {
     }
   }
 
-  // Spotify - New Releases
+  // Music endpoints
   Future<List<Music>> getMusicList({String? status}) async {
     try {
       var url = '$baseUrl/music';
@@ -356,11 +358,27 @@ class ApiService {
     }
   }
 
-  // Spotify endpoints
+  // ============================================
+  // SPOTIFY ENDPOINTS WITH AUTH TOKEN
+  // ============================================
+
+  Future<Map<String, String>> _getSpotifyHeaders() async {
+    final token = await _spotifyAuth.getAccessToken();
+    if (token == null) {
+      throw Exception('Not authenticated with Spotify');
+    }
+    return {
+      'Authorization': 'Bearer $token',
+      'Content-Type': 'application/json',
+    };
+  }
+
   Future<List<Map<String, dynamic>>> getSpotifyNewReleases() async {
     try {
+      final headers = await _getSpotifyHeaders();
       final response = await http.get(
         Uri.parse('$baseUrl/spotify/new-releases'),
+        headers: headers,
       );
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -375,8 +393,10 @@ class ApiService {
 
   Future<List<Map<String, dynamic>>> getSpotifyPlaylists() async {
     try {
+      final headers = await _getSpotifyHeaders();
       final response = await http.get(
         Uri.parse('$baseUrl/spotify/playlists'),
+        headers: headers,
       );
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -391,8 +411,10 @@ class ApiService {
 
   Future<List<Map<String, dynamic>>> getSpotifyAlbums() async {
     try {
+      final headers = await _getSpotifyHeaders();
       final response = await http.get(
-        Uri.parse('$baseUrl/spotify/albums'),
+        Uri.parse('$baseUrl/spotify/liked-albums'),
+        headers: headers,
       );
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -405,10 +427,83 @@ class ApiService {
     }
   }
 
+  Future<List<Map<String, dynamic>>> getSpotifyFollowedArtists() async {
+    try {
+      final headers = await _getSpotifyHeaders();
+      final response = await http.get(
+        Uri.parse('$baseUrl/spotify/followed-artists'),
+        headers: headers,
+      );
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        return List<Map<String, dynamic>>.from(data['artists']);
+      }
+      return [];
+    } catch (e) {
+      print('Error fetching Spotify artists: $e');
+      return [];
+    }
+  }
+
+  Future<Map<String, dynamic>?> getSpotifyUserStats() async {
+    try {
+      final headers = await _getSpotifyHeaders();
+      final response = await http.get(
+        Uri.parse('$baseUrl/spotify/user-stats'),
+        headers: headers,
+      );
+      if (response.statusCode == 200) {
+        return json.decode(response.body);
+      }
+      return null;
+    } catch (e) {
+      print('Error fetching Spotify stats: $e');
+      return null;
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> getSpotifyTopTracks({String timeRange = 'medium_term'}) async {
+    try {
+      final headers = await _getSpotifyHeaders();
+      final response = await http.get(
+        Uri.parse('$baseUrl/spotify/top-tracks?time_range=$timeRange&limit=20'),
+        headers: headers,
+      );
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        return List<Map<String, dynamic>>.from(data['tracks']);
+      }
+      return [];
+    } catch (e) {
+      print('Error fetching Spotify top tracks: $e');
+      return [];
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> getSpotifyTopArtists({String timeRange = 'medium_term'}) async {
+    try {
+      final headers = await _getSpotifyHeaders();
+      final response = await http.get(
+        Uri.parse('$baseUrl/spotify/top-artists?time_range=$timeRange&limit=20'),
+        headers: headers,
+      );
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        return List<Map<String, dynamic>>.from(data['artists']);
+      }
+      return [];
+    } catch (e) {
+      print('Error fetching Spotify top artists: $e');
+      return [];
+    }
+  }
+
   Future<List<Map<String, dynamic>>> getPlaylistTracks(String playlistId) async {
     try {
+      final headers = await _getSpotifyHeaders();
       final response = await http.get(
         Uri.parse('$baseUrl/spotify/playlists/$playlistId/tracks'),
+        headers: headers,
       );
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -423,8 +518,10 @@ class ApiService {
 
   Future<List<Map<String, dynamic>>> getAlbumTracks(String albumId) async {
     try {
+      final headers = await _getSpotifyHeaders();
       final response = await http.get(
         Uri.parse('$baseUrl/spotify/albums/$albumId/tracks'),
+        headers: headers,
       );
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -436,5 +533,4 @@ class ApiService {
       return [];
     }
   }
-  
 }
