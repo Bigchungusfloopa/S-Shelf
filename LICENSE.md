@@ -1,0 +1,8 @@
+Copyright (c) 2025 Saish J
+
+All Rights Reserved.
+
+This software is proprietary and is provided for viewing purposes only.
+No permission is granted to use, copy, modify, or distribute this
+software for any purpose, commercial or non-commercial, without the
+express written permission of the copyright holder.
