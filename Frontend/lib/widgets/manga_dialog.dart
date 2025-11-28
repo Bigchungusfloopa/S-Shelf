@@ -38,6 +38,7 @@ class _MangaDialogState extends State<MangaDialog> {
   bool _isSearching = false;
   List<Map<String, dynamic>> _searchResults = [];
   bool _hasSearched = false;
+  bool _isSaving = false;
 
   @override
   void initState() {
@@ -109,22 +110,31 @@ class _MangaDialogState extends State<MangaDialog> {
     });
   }
 
-  void _save() {
-    if (_formKey.currentState!.validate()) {
-      final manga = Manga(
-        id: widget.manga?.id ?? 0,
-        title: _titleController.text,
-        currentChapter: int.tryParse(_currentChapterController.text) ?? 0,
-        currentVolume: int.tryParse(_currentVolumeController.text) ?? 0,
-        totalChapters: int.tryParse(_totalChaptersController.text),
-        totalVolumes: int.tryParse(_totalVolumesController.text),
-        status: _status,
-        rating: _rating,
-        notes: _notesController.text.isEmpty ? null : _notesController.text,
-        imageUrl: _imageUrl,
-      );
-      widget.onSave(manga);
-      Navigator.pop(context);
+  Future<void> _save() async {
+    if (!_formKey.currentState!.validate()) return;
+    
+    setState(() => _isSaving = true);
+
+    final manga = Manga(
+      id: widget.manga?.id ?? 0,
+      title: _titleController.text,
+      currentChapter: int.tryParse(_currentChapterController.text) ?? 0,
+      currentVolume: int.tryParse(_currentVolumeController.text) ?? 0,
+      totalChapters: int.tryParse(_totalChaptersController.text),
+      totalVolumes: int.tryParse(_totalVolumesController.text),
+      status: _status,
+      rating: _rating,
+      notes: _notesController.text.isEmpty ? null : _notesController.text,
+      imageUrl: _imageUrl,
+    );
+    
+    // Call the onSave callback
+    await widget.onSave(manga);
+    
+    setState(() => _isSaving = false);
+    
+    if (mounted) {
+      Navigator.pop(context, true);
     }
   }
 
@@ -579,7 +589,7 @@ class _MangaDialogState extends State<MangaDialog> {
                           if (widget.manga != null && widget.onDelete != null)
                             Expanded(
                               child: OutlinedButton.icon(
-                                onPressed: () {
+                                onPressed: _isSaving ? null : () {
                                   widget.onDelete!();
                                   Navigator.pop(context);
                                 },
@@ -597,7 +607,7 @@ class _MangaDialogState extends State<MangaDialog> {
                           Expanded(
                             flex: 2,
                             child: ElevatedButton(
-                              onPressed: _save,
+                              onPressed: _isSaving ? null : _save,
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: theme.accentColor,
                                 foregroundColor: Colors.white,
@@ -606,10 +616,19 @@ class _MangaDialogState extends State<MangaDialog> {
                                   borderRadius: BorderRadius.circular(12),
                                 ),
                               ),
-                              child: Text(
-                                widget.manga == null ? 'Add Manga' : 'Save Changes',
-                                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                              ),
+                              child: _isSaving
+                                  ? SizedBox(
+                                      height: 20,
+                                      width: 20,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Colors.white,
+                                      ),
+                                    )
+                                  : Text(
+                                      widget.manga == null ? 'Add Manga' : 'Save Changes',
+                                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                                    ),
                             ),
                           ),
                         ],

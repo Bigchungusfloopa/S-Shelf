@@ -154,11 +154,11 @@ class _HomeScreenState extends State<HomeScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'Media Tracker',
+                              'Home',
                               style: theme.textTheme.displayLarge,
                             ),
                             Text(
-                              'Your personal anime, manga & music library',
+                              '...',
                               style: theme.textTheme.bodySmall,
                             ),
                           ],
