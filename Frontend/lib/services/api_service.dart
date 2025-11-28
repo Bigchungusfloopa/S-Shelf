@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:http/http.dart' as http;
 import '../models/models.dart';
 import 'spotify_auth_service.dart';
@@ -6,9 +7,108 @@ import 'spotify_auth_service.dart';
 class ApiService {
   static const String baseUrl = 'http://localhost:8000';
   final SpotifyAuthService _spotifyAuth = SpotifyAuthService();
+  
+  Process? _backendProcess;
+
+  // Check if backend is running
+  Future<bool> isBackendRunning() async {
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/docs'),
+      ).timeout(Duration(seconds: 2));
+      return response.statusCode == 200;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // Start backend process
+  Future<bool> startBackend() async {
+    try {
+      print('🚀 Starting backend server...');
+      
+      // Get user's home directory
+      final home = Platform.environment['HOME'];
+      if (home == null) {
+        print('❌ Could not determine home directory');
+        return false;
+      }
+      
+      final backendPath = '$home/Omnishelf/Backend';
+      final venvPython = '$backendPath/venv/bin/python';
+      final uvicornPath = '$backendPath/venv/bin/uvicorn';
+      
+      // Check if backend directory exists
+      if (!await Directory(backendPath).exists()) {
+        print('❌ Backend directory not found at: $backendPath');
+        return false;
+      }
+      
+      // Check if venv exists
+      if (!await File(uvicornPath).exists()) {
+        print('❌ Virtual environment not found. Please run: cd $backendPath && python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt');
+        return false;
+      }
+      
+      // Start uvicorn process
+      _backendProcess = await Process.start(
+        uvicornPath,
+        [
+          'app.main:app',
+          '--host', '0.0.0.0',
+          '--port', '8000',
+        ],
+        workingDirectory: backendPath,
+        runInShell: false,
+      );
+      
+      // Listen to process output
+      _backendProcess!.stdout.transform(utf8.decoder).listen((data) {
+        print('Backend: $data');
+      });
+      
+      _backendProcess!.stderr.transform(utf8.decoder).listen((data) {
+        print('Backend Error: $data');
+      });
+      
+      // Wait a bit for server to start
+      await Future.delayed(Duration(seconds: 3));
+      
+      // Check if it's actually running
+      final isRunning = await isBackendRunning();
+      if (isRunning) {
+        print('✅ Backend started successfully!');
+        return true;
+      } else {
+        print('⚠️ Backend process started but not responding');
+        return false;
+      }
+    } catch (e) {
+      print('❌ Error starting backend: $e');
+      return false;
+    }
+  }
+
+  // Ensure backend is running
+  Future<bool> ensureBackendRunning() async {
+    if (await isBackendRunning()) {
+      print('✅ Backend already running');
+      return true;
+    }
+    
+    print('⚠️ Backend not running, attempting to start...');
+    return await startBackend();
+  }
+
+  // Stop backend when app closes
+  void stopBackend() {
+    _backendProcess?.kill();
+    _backendProcess = null;
+  }
 
   // MAL Search - Anime
   Future<List<Map<String, dynamic>>> searchAnimeMAL(String query) async {
+    await ensureBackendRunning();
     try {
       final response = await http.get(
         Uri.parse('$baseUrl/mal/anime/search?q=$query&limit=20'),
@@ -26,6 +126,7 @@ class ApiService {
 
   // MAL Search - Manga
   Future<List<Map<String, dynamic>>> searchMangaMAL(String query) async {
+    await ensureBackendRunning();
     try {
       final response = await http.get(
         Uri.parse('$baseUrl/mal/manga/search?q=$query&limit=20'),
@@ -43,6 +144,7 @@ class ApiService {
 
   // Trending endpoints
   Future<List<Map<String, dynamic>>> getTrendingAnime() async {
+    await ensureBackendRunning();
     try {
       final response = await http.get(Uri.parse('$baseUrl/trending/anime?limit=10'));
       if (response.statusCode == 200) {
@@ -57,6 +159,7 @@ class ApiService {
   }
 
   Future<List<Map<String, dynamic>>> getTrendingManga() async {
+    await ensureBackendRunning();
     try {
       final response = await http.get(Uri.parse('$baseUrl/trending/manga?limit=10'));
       if (response.statusCode == 200) {
@@ -72,6 +175,7 @@ class ApiService {
 
   // Anime endpoints
   Future<List<Anime>> getAnimeList({String? status, String? genre}) async {
+    await ensureBackendRunning();
     try {
       var url = '$baseUrl/anime';
       final params = <String, String>{};
@@ -95,6 +199,7 @@ class ApiService {
   }
 
   Future<bool> createAnime(Map<String, dynamic> data) async {
+    await ensureBackendRunning();
     try {
       final response = await http.post(
         Uri.parse('$baseUrl/anime'),
@@ -109,6 +214,7 @@ class ApiService {
   }
 
   Future<bool> updateAnime(int id, Map<String, dynamic> data) async {
+    await ensureBackendRunning();
     try {
       final response = await http.put(
         Uri.parse('$baseUrl/anime/$id'),
@@ -123,6 +229,7 @@ class ApiService {
   }
 
   Future<bool> deleteAnime(int id) async {
+    await ensureBackendRunning();
     try {
       final response = await http.delete(Uri.parse('$baseUrl/anime/$id'));
       return response.statusCode == 204 || response.statusCode == 200;
@@ -134,6 +241,7 @@ class ApiService {
 
   // Manga endpoints
   Future<List<Manga>> getMangaList({String? status, String? genre}) async {
+    await ensureBackendRunning();
     try {
       var url = '$baseUrl/manga';
       final params = <String, String>{};
@@ -157,6 +265,7 @@ class ApiService {
   }
 
   Future<bool> createManga(Map<String, dynamic> data) async {
+    await ensureBackendRunning();
     try {
       final response = await http.post(
         Uri.parse('$baseUrl/manga'),
@@ -171,6 +280,7 @@ class ApiService {
   }
 
   Future<bool> updateManga(int id, Map<String, dynamic> data) async {
+    await ensureBackendRunning();
     try {
       final response = await http.put(
         Uri.parse('$baseUrl/manga/$id'),
@@ -185,6 +295,7 @@ class ApiService {
   }
 
   Future<bool> deleteManga(int id) async {
+    await ensureBackendRunning();
     try {
       final response = await http.delete(Uri.parse('$baseUrl/manga/$id'));
       return response.statusCode == 204 || response.statusCode == 200;
@@ -196,6 +307,7 @@ class ApiService {
 
   // Games endpoints
   Future<List<Game>> getGamesList({String? status}) async {
+    await ensureBackendRunning();
     try {
       var url = '$baseUrl/games';
       if (status != null) {
@@ -214,6 +326,7 @@ class ApiService {
   }
 
   Future<bool> createGame(Map<String, dynamic> data) async {
+    await ensureBackendRunning();
     try {
       final response = await http.post(
         Uri.parse('$baseUrl/games'),
@@ -228,6 +341,7 @@ class ApiService {
   }
 
   Future<bool> updateGame(int id, Map<String, dynamic> data) async {
+    await ensureBackendRunning();
     try {
       final response = await http.put(
         Uri.parse('$baseUrl/games/$id'),
@@ -242,6 +356,7 @@ class ApiService {
   }
 
   Future<bool> deleteGame(int id) async {
+    await ensureBackendRunning();
     try {
       final response = await http.delete(Uri.parse('$baseUrl/games/$id'));
       return response.statusCode == 204 || response.statusCode == 200;
@@ -253,6 +368,7 @@ class ApiService {
 
   // Stats endpoint
   Future<Stats> getStats() async {
+    await ensureBackendRunning();
     try {
       final response = await http.get(Uri.parse('$baseUrl/stats'));
       if (response.statusCode == 200) {
@@ -293,6 +409,7 @@ class ApiService {
   }
 
   Future<List<String>> getAnimeGenres() async {
+    await ensureBackendRunning();
     try {
       return [];
     } catch (e) {
@@ -303,6 +420,7 @@ class ApiService {
 
   // Music endpoints
   Future<List<Music>> getMusicList({String? status}) async {
+    await ensureBackendRunning();
     try {
       var url = '$baseUrl/music';
       if (status != null) {
@@ -321,6 +439,7 @@ class ApiService {
   }
 
   Future<bool> createMusic(Map<String, dynamic> data) async {
+    await ensureBackendRunning();
     try {
       final response = await http.post(
         Uri.parse('$baseUrl/music'),
@@ -335,6 +454,7 @@ class ApiService {
   }
 
   Future<bool> updateMusic(int id, Map<String, dynamic> data) async {
+    await ensureBackendRunning();
     try {
       final response = await http.put(
         Uri.parse('$baseUrl/music/$id'),
@@ -349,6 +469,7 @@ class ApiService {
   }
 
   Future<bool> deleteMusic(int id) async {
+    await ensureBackendRunning();
     try {
       final response = await http.delete(Uri.parse('$baseUrl/music/$id'));
       return response.statusCode == 204 || response.statusCode == 200;
@@ -374,6 +495,7 @@ class ApiService {
   }
 
   Future<List<Map<String, dynamic>>> getSpotifyNewReleases() async {
+    await ensureBackendRunning();
     try {
       final headers = await _getSpotifyHeaders();
       final response = await http.get(
@@ -392,6 +514,7 @@ class ApiService {
   }
 
   Future<List<Map<String, dynamic>>> getSpotifyPlaylists() async {
+    await ensureBackendRunning();
     try {
       final headers = await _getSpotifyHeaders();
       final response = await http.get(
@@ -410,6 +533,7 @@ class ApiService {
   }
 
   Future<List<Map<String, dynamic>>> getSpotifyAlbums() async {
+    await ensureBackendRunning();
     try {
       final headers = await _getSpotifyHeaders();
       final response = await http.get(
@@ -428,6 +552,7 @@ class ApiService {
   }
 
   Future<List<Map<String, dynamic>>> getSpotifyFollowedArtists() async {
+    await ensureBackendRunning();
     try {
       final headers = await _getSpotifyHeaders();
       final response = await http.get(
@@ -446,6 +571,7 @@ class ApiService {
   }
 
   Future<Map<String, dynamic>?> getSpotifyUserStats() async {
+    await ensureBackendRunning();
     try {
       final headers = await _getSpotifyHeaders();
       final response = await http.get(
@@ -463,6 +589,7 @@ class ApiService {
   }
 
   Future<List<Map<String, dynamic>>> getSpotifyTopTracks({String timeRange = 'medium_term'}) async {
+    await ensureBackendRunning();
     try {
       final headers = await _getSpotifyHeaders();
       final response = await http.get(
@@ -481,6 +608,7 @@ class ApiService {
   }
 
   Future<List<Map<String, dynamic>>> getSpotifyTopArtists({String timeRange = 'medium_term'}) async {
+    await ensureBackendRunning();
     try {
       final headers = await _getSpotifyHeaders();
       final response = await http.get(
@@ -499,6 +627,7 @@ class ApiService {
   }
 
   Future<List<Map<String, dynamic>>> getPlaylistTracks(String playlistId) async {
+    await ensureBackendRunning();
     try {
       final headers = await _getSpotifyHeaders();
       final response = await http.get(
@@ -517,6 +646,7 @@ class ApiService {
   }
 
   Future<List<Map<String, dynamic>>> getAlbumTracks(String albumId) async {
+    await ensureBackendRunning();
     try {
       final headers = await _getSpotifyHeaders();
       final response = await http.get(

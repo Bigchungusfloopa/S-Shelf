@@ -1,4 +1,4 @@
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 import 'dart:convert';
@@ -6,9 +6,9 @@ import 'dart:async';
 import 'dart:io';
 
 class SpotifyAuthService {
-  static const String clientId = 'YOUR_SPOTIFY_CLIENT_ID';
-  static const String clientSecret = 'YOUR_SPOTIFY_CLIENT_SECRET';
-  static const String redirectUri = 'http://localhost:8080/callback';
+  static const String clientId = '56b89f0771d6414db86f6d42395411ce';
+  static const String clientSecret = '10be6435ff1d4405b9436bf3f39e5057';
+  static const String redirectUri = 'http://127.0.0.1:8888/callback';
   static const List<String> scopes = [
     'user-library-read',
     'user-follow-read',
@@ -17,33 +17,110 @@ class SpotifyAuthService {
     'user-read-recently-played'
   ];
 
-  final _storage = FlutterSecureStorage();
   HttpServer? _callbackServer;
   
-  // Check if user is authenticated
   Future<bool> isAuthenticated() async {
-    final token = await _storage.read(key: 'spotify_access_token');
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('spotify_access_token');
     if (token == null) return false;
     
-    // Check if token is expired
-    final expiryStr = await _storage.read(key: 'spotify_token_expiry');
+    final expiryStr = prefs.getString('spotify_token_expiry');
     if (expiryStr != null) {
       final expiry = DateTime.parse(expiryStr);
       if (DateTime.now().isAfter(expiry)) {
-        // Token expired, try to refresh
         return await _refreshToken();
       }
     }
     return true;
   }
 
-  // Start OAuth flow
   Future<bool> authenticate() async {
     try {
-      // Start local server to receive callback
-      _callbackServer = await HttpServer.bind('localhost', 8080);
+      _callbackServer = await HttpServer.bind('127.0.0.1', 8888);
+      print('✅ Started local server on http://127.0.0.1:8888');
       
-      // Generate auth URL
+      final completer = Completer<bool>();
+      bool completed = false;
+      
+      _callbackServer!.listen((HttpRequest request) async {
+        if (completed) return;
+        
+        print('📨 Received request: ${request.uri.path}');
+        
+        if (request.uri.path == '/callback') {
+          final code = request.uri.queryParameters['code'];
+          final error = request.uri.queryParameters['error'];
+          
+          request.response
+            ..statusCode = 200
+            ..headers.contentType = ContentType.html
+            ..write('''
+              <!DOCTYPE html>
+              <html>
+              <head>
+                <meta charset="UTF-8">
+                <title>S-Shelf - Connected!</title>
+                <style>
+                  * { margin: 0; padding: 0; box-sizing: border-box; }
+                  body {
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                    background: linear-gradient(135deg, #1DB954 0%, #191414 100%);
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    min-height: 100vh;
+                    color: white;
+                  }
+                  .container {
+                    text-align: center;
+                    background: rgba(0, 0, 0, 0.8);
+                    padding: 60px 40px;
+                    border-radius: 20px;
+                    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+                    max-width: 500px;
+                  }
+                  h1 { font-size: 36px; margin-bottom: 16px; color: #1DB954; }
+                  p { font-size: 18px; line-height: 1.6; color: #b3b3b3; }
+                  .success { margin-top: 20px; color: #1DB954; font-weight: 600; }
+                </style>
+              </head>
+              <body>
+                <div class="container">
+                  <h1>✅ Connected!</h1>
+                  <p>Your Spotify account is now linked to S-Shelf.</p>
+                  <p class="success">You can close this window and return to the app.</p>
+                </div>
+                <script>setTimeout(() => window.close(), 3000);</script>
+              </body>
+              </html>
+            ''');
+          await request.response.close();
+          
+          if (error != null) {
+            print('❌ OAuth error: $error');
+            completed = true;
+            completer.complete(false);
+            await _callbackServer?.close();
+            _callbackServer = null;
+          } else if (code != null) {
+            print('✅ Got authorization code: ${code.substring(0, 10)}...');
+            completed = true;
+            final success = await _exchangeCodeForToken(code);
+            completer.complete(success);
+            await _callbackServer?.close();
+            _callbackServer = null;
+          }
+        }
+      }, onError: (err) {
+        print('❌ Server error: $err');
+        if (!completed) {
+          completed = true;
+          completer.complete(false);
+          _callbackServer?.close();
+          _callbackServer = null;
+        }
+      });
+      
       final authUrl = Uri.https('accounts.spotify.com', '/authorize', {
         'client_id': clientId,
         'response_type': 'code',
@@ -52,89 +129,49 @@ class SpotifyAuthService {
         'show_dialog': 'true',
       });
 
-      // Open Spotify login in browser
+      print('🌐 Opening Spotify auth URL...');
+      
       if (await canLaunchUrl(authUrl)) {
-        await launchUrl(authUrl, mode: LaunchMode.externalApplication);
+        final launched = await launchUrl(authUrl, mode: LaunchMode.externalApplication);
+        
+        if (!launched) {
+          print('❌ Failed to launch browser');
+          completer.complete(false);
+          _callbackServer?.close();
+          _callbackServer = null;
+          return false;
+        }
+      } else {
+        print('❌ Cannot launch URL');
+        completer.complete(false);
+        _callbackServer?.close();
+        _callbackServer = null;
+        return false;
       }
 
-      // Wait for callback
-      final completer = Completer<bool>();
-      
-      _callbackServer!.listen((HttpRequest request) async {
-        if (request.uri.path == '/callback') {
-          final code = request.uri.queryParameters['code'];
-          
-          if (code != null) {
-            // Exchange code for token
-            final success = await _exchangeCodeForToken(code);
-            
-            // Send response to browser
-            request.response
-              ..statusCode = 200
-              ..headers.contentType = ContentType.html
-              ..write('''
-                <html>
-                  <head>
-                    <style>
-                      body {
-                        background: linear-gradient(135deg, #1DB954, #191414);
-                        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                        display: flex;
-                        justify-content: center;
-                        align-items: center;
-                        height: 100vh;
-                        margin: 0;
-                        color: white;
-                      }
-                      .container {
-                        background: rgba(0, 0, 0, 0.8);
-                        padding: 40px;
-                        border-radius: 20px;
-                        text-align: center;
-                      }
-                      h1 { color: #1DB954; }
-                    </style>
-                  </head>
-                  <body>
-                    <div class="container">
-                      <h1>✅ Connected!</h1>
-                      <p>Your Spotify account is now linked to S-Shelf.</p>
-                      <p>You can close this window and return to the app.</p>
-                    </div>
-                    <script>
-                      setTimeout(() => window.close(), 3000);
-                    </script>
-                  </body>
-                </html>
-              ''');
-            await request.response.close();
-            
-            completer.complete(success);
-            await _callbackServer?.close();
-            _callbackServer = null;
-          }
-        }
-      });
-
-      return await completer.future.timeout(
-        Duration(minutes: 5),
+      final result = await completer.future.timeout(
+        const Duration(minutes: 5),
         onTimeout: () {
+          print('⏱️ Authentication timeout');
           _callbackServer?.close();
           _callbackServer = null;
           return false;
         },
       );
+      
+      return result;
     } catch (e) {
-      print('Spotify auth error: $e');
+      print('❌ Spotify auth error: $e');
       _callbackServer?.close();
       _callbackServer = null;
       return false;
     }
   }
 
-  // Exchange authorization code for access token
   Future<bool> _exchangeCodeForToken(String code) async {
     try {
+      print('🔄 Exchanging code for token...');
+      
       final response = await http.post(
         Uri.parse('https://accounts.spotify.com/api/token'),
         headers: {
@@ -148,32 +185,41 @@ class SpotifyAuthService {
         },
       );
 
+      print('📡 Token response: ${response.statusCode}');
+
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         
-        // Store tokens securely
-        await _storage.write(key: 'spotify_access_token', value: data['access_token']);
-        await _storage.write(key: 'spotify_refresh_token', value: data['refresh_token']);
+        // Store tokens using SharedPreferences instead of SecureStorage
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('spotify_access_token', data['access_token']);
+        await prefs.setString('spotify_refresh_token', data['refresh_token']);
         
-        // Calculate and store expiry time
         final expiresIn = data['expires_in'] as int;
         final expiryTime = DateTime.now().add(Duration(seconds: expiresIn));
-        await _storage.write(key: 'spotify_token_expiry', value: expiryTime.toIso8601String());
+        await prefs.setString('spotify_token_expiry', expiryTime.toIso8601String());
         
+        print('✅ Token stored successfully!');
         return true;
       }
+      
+      print('❌ Token exchange failed: ${response.statusCode} - ${response.body}');
       return false;
     } catch (e) {
-      print('Token exchange error: $e');
+      print('❌ Token exchange error: $e');
       return false;
     }
   }
 
-  // Refresh expired token
   Future<bool> _refreshToken() async {
     try {
-      final refreshToken = await _storage.read(key: 'spotify_refresh_token');
-      if (refreshToken == null) return false;
+      print('🔄 Refreshing token...');
+      final prefs = await SharedPreferences.getInstance();
+      final refreshToken = prefs.getString('spotify_refresh_token');
+      if (refreshToken == null) {
+        print('❌ No refresh token found');
+        return false;
+      }
 
       final response = await http.post(
         Uri.parse('https://accounts.spotify.com/api/token'),
@@ -190,33 +236,43 @@ class SpotifyAuthService {
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         
-        await _storage.write(key: 'spotify_access_token', value: data['access_token']);
+        await prefs.setString('spotify_access_token', data['access_token']);
         
         final expiresIn = data['expires_in'] as int;
         final expiryTime = DateTime.now().add(Duration(seconds: expiresIn));
-        await _storage.write(key: 'spotify_token_expiry', value: expiryTime.toIso8601String());
+        await prefs.setString('spotify_token_expiry', expiryTime.toIso8601String());
         
+        print('✅ Token refreshed successfully!');
         return true;
       }
+      
+      print('❌ Token refresh failed: ${response.statusCode}');
       return false;
     } catch (e) {
-      print('Token refresh error: $e');
+      print('❌ Token refresh error: $e');
       return false;
     }
   }
 
-  // Get current access token
   Future<String?> getAccessToken() async {
     if (await isAuthenticated()) {
-      return await _storage.read(key: 'spotify_access_token');
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getString('spotify_access_token');
     }
     return null;
   }
 
-  // Sign out
   Future<void> signOut() async {
-    await _storage.delete(key: 'spotify_access_token');
-    await _storage.delete(key: 'spotify_refresh_token');
-    await _storage.delete(key: 'spotify_token_expiry');
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('spotify_access_token');
+    await prefs.remove('spotify_refresh_token');
+    await prefs.remove('spotify_token_expiry');
+    _callbackServer?.close();
+    _callbackServer = null;
+  }
+
+  void dispose() {
+    _callbackServer?.close();
+    _callbackServer = null;
   }
 }
