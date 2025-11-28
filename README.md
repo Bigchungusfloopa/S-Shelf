@@ -127,10 +127,6 @@ open build/macos/Build/Products/Release/S-Shelf.app
 3. Authorize in browser
 4. View your complete music library and stats
 
-## 📸 Screenshots
-
-*Coming soon*
-
 ## 🗺️ Roadmap
 
 - [ ] iOS and Android builds
@@ -140,18 +136,10 @@ open build/macos/Build/Products/Release/S-Shelf.app
 - [ ] Cloud sync across devices
 - [ ] Custom themes and color schemes
 
-## 📄 License
-
-MIT License - see LICENSE file for details
-
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
 ## 🐛 Known Issues
 
 - Backend requires manual stop if app crashes (process cleanup coming soon)
-- Spotify token refresh requires re-authentication after 60 minutes (auto-refresh in progress)
+- Spotify token refresh requires re-authentication after 60 minutes 
 
 ## 💡 Acknowledgments
 
