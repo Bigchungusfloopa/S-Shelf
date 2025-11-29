@@ -71,7 +71,7 @@ S-Shelf is a comprehensive media tracker that helps you organize and monitor you
 
 1. Clone the repository
 ```bash
-git clone https://github.com/yourusername/s-shelf.git
+git clone https://github.com/Bigchungusfloopa/s-shelf.git
 cd s-shelf
 ```
 
